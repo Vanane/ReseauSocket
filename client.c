@@ -10,16 +10,14 @@ client <adresse-serveur> <message-a-transmettre>
 #include <string.h>
 #include "conio/conio.c"
 
+#include "course.c" // Divers types et fonctions en relation avec les entités du jeu de course
+#include "utils.c"
+
 typedef struct sockaddr 	sockaddr;
 typedef struct sockaddr_in 	sockaddr_in;
 typedef struct hostent 		hostent;
 typedef struct servent 		servent;
 
-struct tJoueur
-{
-    int id;
-    int avancee;
-} typedef joueur;
 
 enum State
 {
@@ -33,6 +31,7 @@ enum State
 
 
 int main(int argc, char **argv) {
+    /* Variables liées au socket */
     int port = 12345;
     int 	socket_descriptor, 	/* descripteur de socket */
         longueur; 		/* longueur d'un buffer utilisé */
@@ -42,23 +41,25 @@ int main(int argc, char **argv) {
     char 	buffer[256];
     char *	prog; 			/* nom du programme */
     char *	host; 			/* nom de la machine distante */
-    char *	mesg; 			/* message envoyé */
 
-
+    
+    /* Variables liées au jeu */
     enum State state = Init;
 
-    if (argc != 3) {
-        perror("usage : client <adresse-serveur> <message-a-transmettre>");
+    joueur joueurs[4];
+    char * pseudo;
+
+
+    if (argc != 2) {
+        perror("usage : client <adresse-serveur>");
         exit(1);
     }
    
     prog = argv[0];
     host = argv[1];
-    mesg = argv[2];
     
     printf("nom de l'executable : %s \n", prog);
     printf("adresse du serveur  : %s \n", host);
-    printf("message envoye      : %s \n", mesg);
     
     if ((ptr_host = gethostbyname(host)) == NULL) {
         perror("erreur : impossible de trouver le serveur a partir de son adresse.");
@@ -86,19 +87,22 @@ int main(int argc, char **argv) {
         perror("erreur : impossible de se connecter au serveur.");
         exit(1);
     }
-    
-    printf("connexion etablie avec le serveur. \n");
-    printf("envoi d'un message au serveur. \n");
-      
-    /* envoi du message vers le serveur */
-    if ((write(socket_descriptor, mesg, strlen(mesg))) < 0)
-    {
-        perror("erreur : impossible d'ecrire le message destine au serveur.");
-        exit(1);
-    }
     else
-    {        
-        state = WaitForStart;
+    {
+        do
+        {
+            printf("Choisissez votre pseudo :\n");
+            pseudo = SaisirString(MAX_PSEUDO_LENGTH);
+            char message[sizeof("0") + MAX_PSEUDO_LENGTH + 1] = "0";
+
+            strcpy(message + 1, pseudo);
+
+            int err;
+            if((err = write(socket_descriptor, message, strlen(message) + 1)) != strlen(message) + 1)
+                printf("Une erreur de communication est survenue : %d", err);
+            else
+                state = WaitForStart;
+        } while (state != WaitForStart);
     }
     
     
@@ -109,8 +113,12 @@ int main(int argc, char **argv) {
 
    while(state == WaitForStart)
    {
-
-   }
+        if((longueur = read(socket_descriptor, buffer, sizeof(buffer))) > 0)
+        {
+            printf("reponse du serveur : \n");
+            write(1,buffer,longueur);
+        }
+    }
 
 
     printf("message envoye au serveur. \n");

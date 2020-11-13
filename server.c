@@ -8,6 +8,8 @@ Serveur à lancer avant le client
 #include <netdb.h> 		/* pour hostent, servent */
 #include <string.h> 		/* pour bcopy, ... */  
 
+#include "course.c" // Divers types et fonctions en relation avec les entités du jeu de course
+
 #define TAILLE_MAX_NOM 256
 
 typedef struct sockaddr sockaddr;
@@ -15,11 +17,6 @@ typedef struct sockaddr_in sockaddr_in;
 typedef struct hostent hostent;
 typedef struct servent servent;
 
-struct tJoueur
-{
-    int id;
-    int avancee;
-} typedef joueur;
 
 enum ServerState
 {
@@ -41,13 +38,13 @@ void gererMessage(int sock)
     if ((longueur = read(sock, buffer, sizeof(buffer))) <= 0) 
     	return;
     
-    printf("premier char : %c", buffer[0]);
+    printf("premier char : %c\n", buffer[0]);
     printf("message lu : %s \n", buffer);
 
     switch(buffer[0])
     {
-      case '0':
-        printf("%s", "message 0");
+      case '0': // Premier message qui est l'envoi du pseudo au serveur
+        printf("pseudo du joueur : '%s'\n",  (buffer + 1));
         break;
       case '1':
         printf("%s", "message 1");
@@ -83,7 +80,6 @@ main(int argc, char **argv) {
 
     joueur joueurs[4]; /* Tableau contenant les joueurs */
     enum ServerState state = Init;
-
     
     gethostname(machine,TAILLE_MAX_NOM);		/* recuperation du nom de la machine */
     
