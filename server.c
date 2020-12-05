@@ -8,8 +8,9 @@ Serveur à lancer avant le client
 #include <netdb.h> 		/* pour hostent, servent */
 #include <string.h> 		/* pour bcopy, ... */  
 #include <pthread.h>
+#include <unistd.h>
 
-#include "course.c" // Divers types et fonctions en relation avec les entités du jeu de course
+#include "libs/course.c" // Divers types et fonctions en relation avec les entités du jeu de course
 
 #define TAILLE_MAX_NOM 256
 
@@ -19,28 +20,19 @@ typedef struct hostent hostent;
 typedef struct servent servent;
 
 
-
-enum ServerState
-{
-	Init,
-	WaitPlayers,
-	Starting,
-	Playing,
-	Paused,
-	Finished
-};
-
-
-struct TthreadArgs {
-	enum ServerState * state;
+struct TserverThreadArgs {
+	enum State * state;
 	joueur * j;
+	int monId;
 	int fd;
-} typedef threadArgs;
+	int * sockets;
+} typedef serverThreadArgs;
 
-
-void * ThreadJoueur(threadArgs * args);
+void GlobalMessage(char * message, int * sockets);
+void GlobalMessageSize(char * message, int * sockets, int size);
+void InitJoueurs(joueur joueurs[MAX_NB_JOUEURS]);
+void * ThreadJoueur(void * arg);
 int main(int argc, char **argv);
-void test(int * t);
 
 
 int main(int argc, char **argv) {
@@ -57,13 +49,15 @@ int main(int argc, char **argv) {
 	char buffer[256];
 	int longueur;
 
-	pthread_t threads[4];
+	serverThreadArgs threadArgs[MAX_NB_JOUEURS];
+	pthread_t threads[MAX_NB_JOUEURS];
+	int clientSockets[MAX_NB_JOUEURS]; //Contient tous les sockets des clients, pour par exemple envoyer des messages globaux
 
 	/* Variables liées au jeu */
-	joueur joueurs[4]; /* Tableau contenant les joueurs */
+	joueur joueurs[MAX_NB_JOUEURS]; /* Tableau contenant les joueurs */
 	int nbJoueurs = 0;
 
-	enum ServerState state = Init;
+	enum State state = Init;
 
 	
 	gethostname(machine,TAILLE_MAX_NOM);		/* recuperation du nom de la machine */
@@ -117,24 +111,20 @@ int main(int argc, char **argv) {
 	//   3 = Le serveur envoie la position des joueurs
 	//   4 = Le serveur envoie le signal "Pause"
 	//   5 = Le serveur envoie le signal "Joueur Gagnant"
-	//   6 = Le serveur envoie les informations du joueur gagnant
 
 	// Côté Serveur : 
 	//   0 = Le client envoie ses informations (pseudo, IP)
 	//   1 = Le client hôte envoie le signal "Démarrage de la partie"
 	//   2 = Le client envoie le signal "Appui sur Espace"
 	//   3 = Le client envoie le signal "Pause"
-	//   4 = Le serveur envoie le signal "Joueur Gagnant"
-	//   5 = Le serveur envoie les informations du joueur gagnant
+	//   4 = Le client envoie le signal "Joueur Gagnant"
 	
-	
-	/*pthread_t thread;
-	
-	pthread_create(&thread, NULL, &test, &nouv_socket_descriptor);
 
-	*/
-	state = WaitPlayers;
-	while(state == WaitPlayers)
+	InitJoueurs(joueurs);
+
+
+	state = WaitForStart;
+	while(state == WaitForStart)
 	{
 		longueur_adresse_courante = sizeof(adresse_client_courant);
 		/* adresse_client_courant sera renseigné par accept via les infos du connect */
@@ -145,65 +135,162 @@ int main(int argc, char **argv) {
 		}
 		else
 		{
-			threadArgs args =
+			// Si le nombre de joueurs n'est pas encore atteint, on peut créer un nouveau thread pour la nouvelle connexion
+			if(nbJoueurs < MAX_NB_JOUEURS)
 			{
-				&state, &(joueurs[nbJoueurs]), nouv_socket_descriptor
-			};
-			pthread_create(&(threads[nbJoueurs]), NULL, &ThreadJoueur, &args);
-		}
-		
-		if((longueur = read(nouv_socket_descriptor, buffer, sizeof(buffer))) > 0) 
-		{
-			printf("message reçu : %s\n", buffer);
-			switch(buffer[0])
-			{
-				case '0' : // Recevoir pseudo d'un joueur
-				if(nbJoueurs < 4)
+				clientSockets[nbJoueurs] = nouv_socket_descriptor;
+
+				threadArgs[nbJoueurs] = (serverThreadArgs)
 				{
-					printf("message 0\n");
-					char * chaine = malloc(1 + MAX_PSEUDO_LENGTH + 1);
-					* chaine = (char)(nbJoueurs + 48); // + 48 pour avoir le caractères ASCII
-					strncpy(chaine, buffer + 1, min(MAX_PSEUDO_LENGTH, strlen(buffer + 1)));
-					joueurs[nbJoueurs] = JoueurDepuisChaine(chaine);
-
-					char * msg = malloc(1 + sizeof(chaine));
-					* msg = '0';
-					* (msg + 1) = nbJoueurs;
-					write(nouv_socket_descriptor, msg, strlen(msg) + 1);
-
-					nbJoueurs++;
-				}
-				break;
-				case '1' : // Récupérer ID du joueur
-				break;
-				case '2' : // Démarrer partie
-				break;
+					&state, joueurs, nbJoueurs, nouv_socket_descriptor, &clientSockets
+				};
+				pthread_create(&(threads[nbJoueurs]), NULL, &ThreadJoueur, &threadArgs[nbJoueurs]);
+				nbJoueurs++;
+				printf("Nombre de joueurs : %d, dernier arrivé a le thread : %d\n", nbJoueurs, nouv_socket_descriptor);
 			}
 		}
-		//close(nouv_socket_descriptor);	  
 	}
-
-
-
 }
 
-void * ThreadJoueur(threadArgs * args)
+
+void * ThreadJoueur(void * arg)
 {
+	serverThreadArgs * args = arg;
+	printf("init : thread %d\n", (* args).fd);
+	printf("Id joueur thread : %d\n", (* (* args).j).id);
 	char buffer[256];
 
-	while(* (* args).state == WaitPlayers)
+	while(* (* args).state != Finished)
 	{
 		if(read((* args).fd, buffer, sizeof(buffer)) > 0)
 		{
+			printf("message reçu par le thread %d : '%s'\n", (* args).fd, buffer);
 			switch(buffer[0])
 			{
-				case '0':
+				case '0': // Pseudo envoyé
+					;
+					char chaineJoueur[1 + MAX_PSEUDO_LENGTH + 1];
+					// ID du joueur en premier caractère de la chaine
+					* chaineJoueur = (char)((* args).monId + 48); // + 48 pour avoir le caractères ASCII
+					// Pseudo du joueur, dans le buffer du socket, pour le reste de la chaine
+					strncpy(chaineJoueur + 1, buffer + 1, strlen(buffer + 1) + 1);
 
-				break;
-				case '1':
+					// Transformation de la chaine en struct de type joueur
+					(* args).j[(* args).monId] = JoueurDepuisChaine(chaineJoueur);
 
+					// Mise en forme du message à envoyer au joueur géré par ce thread
+					char msgIdJoueur[1 + sizeof(2) + 1];
+					* msgIdJoueur = '1';
+					* (msgIdJoueur + 1) = (char)((* args).j[(* args).monId].id + 48);
+
+					// Mise en forme du message à envoyer à tous les autres joueurs pour les alerter d'un nouveau joueur.
+					char msgInfosJoueur[1 + sizeof(chaineJoueur) + 1];
+					* msgInfosJoueur = '0'; // 0 est le code pour un nouveau joueur, côté client
+					strncpy(msgInfosJoueur + 1, chaineJoueur, sizeof(chaineJoueur) + 1);
+					
+					// Renvoyer au joueur responsable du message son ID
+					write((* args).fd, msgIdJoueur, strlen(msgIdJoueur) + 1);
+
+					for(int i = 0; i < MAX_NB_JOUEURS; i++)
+					{
+						// Pour chaque socket,
+						// Si le socket actuellement itéré est différent du socket client géré par le thread,
+						// Et que le socket itéré n'est pas nul,
+						// Et que le client utilisant ce socket s'est bien connecté au serveur en envoyant son pseudo,
+						if((* args).sockets[i] != (* args).fd && (* args).sockets[i] != 0 && (* args).j[i].pseudo[0] != '\0')
+						{
+							// Alors on envoie au socket itéré les infos du joueur à l'origine du message,
+							write((* args).sockets[i], msgInfosJoueur, strlen(msgInfosJoueur) + 1);		
+							printf("> '%s' Ecrit dans %d (moi %d : %d)\n", msgInfosJoueur, (* args).sockets[i], (* args).fd, ((* args).sockets[i] != (* args).fd));
+
+							// Et on envoie au socket à l'origine du message les infos du client du socket itéré.
+							char jAEnvoyer[1 + MAX_PSEUDO_LENGTH + 1];
+							char message[1 + strlen(jAEnvoyer) + 1];
+				
+							ChaineDepuisJoueur(&(* args).j[i], jAEnvoyer);
+							* message = '0';
+							strncpy(message + 1, jAEnvoyer, strlen(jAEnvoyer) + 1);
+
+							write((* args).fd, message, strlen(message) + 1);
+							printf("> Joueur '%s' envoyé au socket %d\n", message, (* args).fd);
+						}
+						printf("\n");
+					}					
 				break;
+				case '1':; // Démarrer la partie
+				printf("> Démarrage de la partie.\n");
+				
+				GlobalMessage("2d", (* args).sockets);
+
+				printf("\n");
+				break;
+
+				case '2':; // Le joueur appuie sur un bouton lors du jeu
+					(* args).j[(* args).monId].avancee++;
+					printf("Joueur %d a avancé et est à %d.\n", (* args).monId, (* args).j[(* args).monId].avancee);
+					if((* args).j[(* args).monId].avancee >= SCORE)
+					{
+						printf("> Joueur %d a gagné !\n", (* args).monId);
+						char message[3 + 1] = "5_g";
+						message[1] = (* args).monId + 48;
+						GlobalMessage(message, (* args).sockets);
+					}
+					else
+					{
+						char message[1 + (1 + 1) * MAX_NB_JOUEURS + 1];
+						message[0] = '3';
+						message[strlen(message)] = '\0';
+
+						int nb = 0;
+						for(int i = 0; i < MAX_NB_JOUEURS; i++)
+						{
+							if((* args).j[i].pseudo[0] != '\0')
+							{
+								printf("%d\n", nb);
+								message[1 + 2 * nb] = (* args).j[i].id + 48;
+								message[1 + 2 * nb + 1] = (char)(* args).j[i].avancee; // Le caractère peut être à \0, mais le client interprètera ça comme un chiffre.
+								
+								nb++;
+							}
+						}
+						printf("Message : %s\n", message);
+						PrintAscii(message, 10);
+						GlobalMessageSize(message, (* args).sockets, (1 + (1 + 1) * MAX_NB_JOUEURS));
+					}					
+				break;			
 			}
+			printf("\n");
+		}
+	}
+	return NULL;
+}
+
+
+/// Envoie un message à tous les FD de sockets qui ne sont pas nuls.
+void GlobalMessage(char * message, int * sockets)
+{
+	for(int i = 0; i < MAX_NB_JOUEURS; i++)
+	{
+		// Pour chaque socket non nul,
+		if(sockets[i] != 0)
+		{
+			// Envoyer le message permettant de signaler le début de la partie à chaque socket.
+			write(sockets[i], message, strlen(message) + 1);
+		}
+	}
+}
+
+
+/// Envoie un message à tous les FD de sockets qui ne sont pas nuls, avec une taille donnée en paramètre.
+void GlobalMessageSize(char * message, int * sockets, int size)
+{
+	for(int i = 0; i < MAX_NB_JOUEURS; i++)
+	{
+		// Pour chaque socket non nul,
+		if(sockets[i] != 0)
+		{
+			// Envoyer le message permettant de signaler le début de la partie à chaque socket.
+			write(sockets[i], message, size + 1);
 		}
 	}
 }

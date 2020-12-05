@@ -52,3 +52,9 @@ int max(int a, int b)
 {
     return a > b ? a : b;
 }
+
+
+int randBetween(int min, int max)
+{
+    return rand()%((max+1)-min) + min;
+}
