@@ -32,8 +32,8 @@ struct TclientThreadArgs {
 // GLOBALS
 struct winsize WINSIZE; // Récupère les informations sur la fenêtre de commande.
 
-
-void UpdateScreen( joueur * joueurs);
+void InitScreen(joueur * joueurs);
+void UpdateScreen(joueur * joueurs);
 void RecupererId(char * message, int * monId);
 void InfoJoueur(char * message, joueur joueurs[]);
 void * ThreadJoueur(void * arg);
@@ -160,9 +160,10 @@ int main(int argc, char **argv) {
 	// Tant que ce n'est pas fini, on boucle sur l'état actuel.
 	char * keys = "gd";
 	char next = 0;
-	printf("Appuyez sur ");
-	printf("%c !", keys[next]);
 
+	InitScreen(joueurs);
+	UpdateScreen(joueurs);
+	
 	while(state != Finished)
 	{
 		switch(state)
@@ -253,8 +254,6 @@ void * ThreadJoueur(void * arg)
 	int nbJoueurs = 0;
 	char buffer[256];
 	
-	printf("Ecoute sur %d\n", (* args).fd);
-
 	while(* (* args).state != Finished)
 	{
 		if(read((* args).fd, buffer, sizeof(buffer)) > 0)
@@ -326,25 +325,56 @@ void AfficheEcranFin(char * pseudo)
 	printf("\n\n");
 
 	for(int i = 0; i < (strlen(messageFin) + strlen(pseudo) + 3) / 2; i++)
+	{
 		printf("%s", separateur);
+	}
 
 	printf("\n");
 	printf("* %s%s*\n", pseudo, messageFin);
 
 	for(int i = 0; i < (strlen(messageFin) + strlen(pseudo) + 3) / 2; i++)
+	{
 		printf("%s", separateur);
+	}
 	printf("\n");
 }
 
 
-void UpdateScreen(joueur * joueurs)
+void InitScreen(joueur * joueurs)
 {
-	int x = WINSIZE.ws_col;
-	int y = WINSIZE.ws_row;
+	int x = WINSIZE.ws_col - 1;
+	int y = WINSIZE.ws_row - 1;
 
 	int paddingX = 2, paddingY = 2;
 	int barPadding = 2;
+	
+	char * score = "Score à atteindre : ";
+
 	c_clrscr();
+	c_gotoxy(0, 0);
+	printf("> Appuyez alternativement sur G et D pour avancer !");
+	
+	c_gotoxy(x - strlen(score) - 2 * paddingX, 0);
+	printf("%s%d\n", score, SCORE);
+
+	c_gotoxy(paddingX, paddingY);
+	int ind = 0;
+	for(int i = 0; i < MAX_NB_JOUEURS; i++)
+	{
+		if(joueurs[i].pseudo[0] != '\0')
+		{
+			c_gotoxy(paddingX, paddingY + (barPadding + 1) * i);
+			printf("%s :\n", joueurs[i].pseudo);
+		}
+	}
+}
+
+
+
+void UpdateScreen(joueur * joueurs)
+{
+	int paddingX = 2, paddingY = 2;
+	int barPadding = 2;
 
 	c_gotoxy(paddingX, paddingY);
 	int ind = 0;
@@ -358,10 +388,8 @@ void UpdateScreen(joueur * joueurs)
 				bar[j] = '#';
 			}
 			bar[joueurs[i].avancee] = '\0';
-			c_gotoxy(paddingX, paddingY + (barPadding + 1) * i);
-			printf("%s :\n", joueurs[i].pseudo);
 			c_gotoxy(paddingX, paddingY + (barPadding + 1) * i + 1);
-			printf("%s\n", bar);
+			printf("%s %d\n", bar, joueurs[i].avancee);
 		}
 	}
 }

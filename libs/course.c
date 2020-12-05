@@ -3,7 +3,7 @@
 
 #include "utils.c"
 
-#define SCORE 25 // Score à atteindre pour gagner
+#define SCORE 25 // Score à atteindre pour gagner. Maximum possible techniquement : 127.
 #define MAX_PSEUDO_LENGTH 20
 #define MAX_NB_JOUEURS 4
 

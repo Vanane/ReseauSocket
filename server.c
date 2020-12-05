@@ -124,7 +124,7 @@ int main(int argc, char **argv) {
 
 
 	state = WaitForStart;
-	while(state == WaitForStart)
+	while(state != Finished)
 	{
 		longueur_adresse_courante = sizeof(adresse_client_courant);
 		/* adresse_client_courant sera renseigné par accept via les infos du connect */
@@ -234,6 +234,7 @@ void * ThreadJoueur(void * arg)
 						char message[3 + 1] = "5_g";
 						message[1] = (* args).monId + 48;
 						GlobalMessage(message, (* args).sockets);
+						* (* args).state = Finished;
 					}
 					else
 					{
