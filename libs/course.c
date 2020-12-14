@@ -6,6 +6,8 @@
 #define SCORE 25 // Score à atteindre pour gagner. Maximum possible techniquement : 127.
 #define MAX_PSEUDO_LENGTH 20
 #define MAX_NB_JOUEURS 4
+#define MAX_NB_PARTIES 25
+#define MAX_NB_CONNEXIONS MAX_NB_JOUEURS * MAX_NB_PARTIES
 
 
 enum State
@@ -28,11 +30,13 @@ struct tJoueur
 } typedef joueur;
 
 
-// Struct correspondant à une fonction pour prendre en charge un message reçu
-struct tMessage
-{
-    void (*handler)(char *);
-} typedef message;
+struct tPartie {
+    int id;
+    int nbJoueurs;
+    enum State state;
+    int * joueursSockets;
+    joueur * joueurs;
+} typedef partie;
 
 
 void ChaineDepuisJoueur(joueur * j, char output[])
@@ -46,10 +50,25 @@ void InitJoueurs(joueur joueurs[MAX_NB_JOUEURS])
 {
 	for(int i = 0; i < MAX_NB_JOUEURS; i++)
 	{
-		joueurs[i].id = i;
-		strcpy(joueurs[i].pseudo, "\0");
-        joueurs[i].avancee = 0;
+        joueur j;
+		j.id = i;
+		strcpy(j.pseudo, "\0");
+        j.avancee = 0;
+        joueurs[i] = j;
 	}
+}
+
+
+void InitPartie(partie * p)
+{
+    (* p).id = -1;
+    InitJoueurs((* p).joueurs);
+    for(int i = 0; i < MAX_NB_JOUEURS; i++)
+    {
+        (* p).joueursSockets[i] = -1;
+    }
+    (* p).nbJoueurs = 0;
+    (* p).state = Init;
 }
 
 

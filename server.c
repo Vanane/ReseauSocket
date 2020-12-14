@@ -20,17 +20,45 @@ typedef struct hostent hostent;
 typedef struct servent servent;
 
 
-struct TserverThreadArgs {
+struct TjoueurThreadArgs {
 	enum State * state;
-	joueur * j;
+	partie * partie;
+	joueur * j; // Structure qui représente le joueur
 	int monId;
 	int fd;
 	int * sockets;
-} typedef serverThreadArgs;
+	int * pauseId; // Id du joueur qui a mis pause.
+} typedef joueurThreadArgs;
+
+
+struct TpartieThreadArgs {
+	int numPartie;
+	partie * mPartie;
+} typedef partieThreadArgs;
+
+
+struct TconnectThreadArgs {
+	partieThreadArgs * tPartieThreadArgs; // Tableau des arguments de threads parties
+	int * nbParties;
+	int socket;
+	int * joueurSockets;
+	pthread_t * partieThreads;
+	joueurThreadArgs * tJoueurThreadArgs; // Tableau des arguments de threads joueurs
+	pthread_t * joueursThreads;
+	partie * parties;
+	joueur * joueurs;
+	int * nbJoueurs;
+} typedef connectThreadArgs;
+
+
+
 
 void GlobalMessage(char * message, int * sockets);
 void GlobalMessageSize(char * message, int * sockets, int size);
 void InitJoueurs(joueur joueurs[MAX_NB_JOUEURS]);
+void AjoutJoueurAPartie(partie * p, int socketj);
+void * ThreadConnexion(void * arg);
+void * ThreadPartie(void * arg);
 void * ThreadJoueur(void * arg);
 int main(int argc, char **argv);
 
@@ -44,21 +72,20 @@ int main(int argc, char **argv) {
 	sockaddr_in adresse_locale, 		/* structure d'adresse locale*/
 		adresse_client_courant; 	/* adresse client courant */
 	hostent* ptr_hote; 			/* les infos recuperees sur la machine hote */
-	servent* ptr_service; 			/* les infos recuperees sur le service de la machine */
 	char machine[TAILLE_MAX_NOM+1]; 	/* nom de la machine locale */
 	char buffer[256];
-	int longueur;
 
-	serverThreadArgs threadArgs[MAX_NB_JOUEURS];
-	pthread_t threads[MAX_NB_JOUEURS];
-	int clientSockets[MAX_NB_JOUEURS]; //Contient tous les sockets des clients, pour par exemple envoyer des messages globaux
+	joueurThreadArgs tabJoueurThreadArgs[MAX_NB_CONNEXIONS];
+	connectThreadArgs tabConnectThreadArgs[MAX_NB_CONNEXIONS];
+	partieThreadArgs tabPartieThreadArgs[MAX_NB_PARTIES];
+	pthread_t joueurThreads[MAX_NB_CONNEXIONS];
+	pthread_t partieThreads[MAX_NB_PARTIES];
+	int clientSockets[MAX_NB_CONNEXIONS]; //Contient tous les sockets des clients, pour par exemple envoyer des messages globaux
 
-	/* Variables liées au jeu */
-	joueur joueurs[MAX_NB_JOUEURS]; /* Tableau contenant les joueurs */
+	partie parties[MAX_NB_PARTIES];
+	joueur joueurs[MAX_NB_CONNEXIONS];
+	int nbParties = 0;
 	int nbJoueurs = 0;
-
-	enum State state = Init;
-
 	
 	gethostname(machine,TAILLE_MAX_NOM);		/* recuperation du nom de la machine */
 	
@@ -96,7 +123,7 @@ int main(int argc, char **argv) {
 	}
 	
 	/* initialisation de la file d'ecoute */
-	listen(socket_descriptor,5);
+	listen(socket_descriptor,20);
 
 
 	/**********************
@@ -119,12 +146,7 @@ int main(int argc, char **argv) {
 	//   3 = Le client envoie le signal "Pause"
 	//   4 = Le client envoie le signal "Joueur Gagnant"
 	
-
-	InitJoueurs(joueurs);
-
-
-	state = WaitForStart;
-	while(state != Finished)
+	while(1)
 	{
 		longueur_adresse_courante = sizeof(adresse_client_courant);
 		/* adresse_client_courant sera renseigné par accept via les infos du connect */
@@ -135,31 +157,71 @@ int main(int argc, char **argv) {
 		}
 		else
 		{
-			// Si le nombre de joueurs n'est pas encore atteint, on peut créer un nouveau thread pour la nouvelle connexion
-			if(nbJoueurs < MAX_NB_JOUEURS)
+			printf("Nombre de joueurs : %d, dernier arrivé a le thread : %d\n", nbJoueurs, nouv_socket_descriptor);
+			if(nbJoueurs > MAX_NB_CONNEXIONS)
+			{
+				char * message = "Il y a trop de joueurs connectés !\n";
+				write(nouv_socket_descriptor, message, strlen(message));
+				close(nouv_socket_descriptor);
+			}
+			else
 			{
 				clientSockets[nbJoueurs] = nouv_socket_descriptor;
-
-				threadArgs[nbJoueurs] = (serverThreadArgs)
+				tabConnectThreadArgs[nbJoueurs] = (connectThreadArgs)
 				{
-					&state, joueurs, nbJoueurs, nouv_socket_descriptor, &clientSockets
+					tabPartieThreadArgs, &nbParties, nouv_socket_descriptor, clientSockets, partieThreads, &tabJoueurThreadArgs[0], joueurThreads, &parties[0], &joueurs[0], &nbJoueurs
 				};
-				pthread_create(&(threads[nbJoueurs]), NULL, &ThreadJoueur, &threadArgs[nbJoueurs]);
+				pthread_t thread;
+				pthread_create(&thread, NULL, &ThreadConnexion, &tabConnectThreadArgs[nbJoueurs]);
 				nbJoueurs++;
-				printf("Nombre de joueurs : %d, dernier arrivé a le thread : %d\n", nbJoueurs, nouv_socket_descriptor);
 			}
 		}
 	}
+
+	/*
+	while(1)
+	{
+		InitJoueurs(joueurs);
+
+
+		state = WaitForStart;
+		while(state != Finished)
+		{
+			longueur_adresse_courante = sizeof(adresse_client_courant);
+			// adresse_client_courant sera renseigné par accept via les infos du connect
+			if((nouv_socket_descriptor = accept(socket_descriptor, (sockaddr*)(&adresse_client_courant), &longueur_adresse_courante)) < 0)
+			{
+				perror("erreur : impossible d'accepter la connexion avec le client.");
+				exit(1);
+			}
+			else
+			{
+				// Si le nombre de joueurs n'est pas encore atteint, on peut créer un nouveau thread pour la nouvelle connexion
+				if(nbJoueurs < MAX_NB_JOUEURS)
+				{
+					clientSockets[nbJoueurs] = nouv_socket_descriptor;
+
+					tabJoueurThreadArgs[nbJoueurs] = (joueurThreadArgs)
+					{
+						&state, joueurs, nbJoueurs, nouv_socket_descriptor, &clientSockets
+					};
+					pthread_create(&(joueurThreads[nbJoueurs]), NULL, &ThreadJoueur, &tabJoueurThreadArgs[nbJoueurs]);
+					nbJoueurs++;
+					printf("Nombre de joueurs : %d, dernier arrivé a le thread : %d\n", nbJoueurs, nouv_socket_descriptor);
+				}
+			}
+		}
+	}
+	*/
 }
 
 
 void * ThreadJoueur(void * arg)
 {
-	serverThreadArgs * args = arg;
-	printf("init : thread %d\n", (* args).fd);
+	joueurThreadArgs * args = arg;
+	printf("init ThreadJoueur n°%d\n", (* args).fd);
 	printf("Id joueur thread : %d\n", (* (* args).j).id);
 	char buffer[256];
-
 	while(* (* args).state != Finished)
 	{
 		if(read((* args).fd, buffer, sizeof(buffer)) > 0)
@@ -254,18 +316,121 @@ void * ThreadJoueur(void * arg)
 								nb++;
 							}
 						}
-						printf("Message : %s\n", message);
-						PrintAscii(message, 10);
 						GlobalMessageSize(message, (* args).sockets, (1 + (1 + 1) * MAX_NB_JOUEURS));
-					}					
-				break;			
+					}
+				break;	
+				case '8':;
+				break;
+				case '9':;
+				break;		
 			}
 			printf("\n");
 		}
 	}
+	for(int i = 0; i < MAX_NB_JOUEURS; i++)
+	{
+		close((* args).sockets[i]);
+	}
 	return NULL;
 }
 
+
+void * ThreadPartie(void * arg)
+{
+	partieThreadArgs * args = arg;
+	printf("debug partie 1\n");
+	partie * maPartie = (*args).mPartie;
+	printf("debug partie 2\n");
+	printf("init ThreadPartie n°%d\n", (* maPartie).id);	
+	int nbJoueurs = 0;
+	enum State state = Init;
+	printf("debug partie 2\n");
+	InitJoueurs((* maPartie).joueurs);
+	printf("debug partie 3\n");
+	state = WaitForStart;
+	while(state == WaitForStart);
+	return NULL;
+}
+
+
+void * ThreadConnexion(void * arg)
+{
+	connectThreadArgs * args = arg;
+	char buffer[256];
+
+	read((* args).socket, buffer, sizeof(buffer));
+	switch(buffer[0])
+	{
+		case '8':; // Créer une partie
+			if(* (* args).nbParties > MAX_NB_PARTIES)
+			{
+				char message[2 + 1] = "8_";
+				message[1] = (char) (-1);
+				write((* args).socket, message, sizeof(message));
+			}
+			else
+			{
+				int idPartie = (* (* args).nbParties);
+				partie * pARejoindre = &(* args).parties[idPartie];
+				(* pARejoindre).id = idPartie;
+				(* pARejoindre).joueurs = &(* args).joueurs[(* pARejoindre).id * MAX_NB_JOUEURS];
+				(* pARejoindre).joueursSockets = (* args).joueurSockets + ((* pARejoindre).id * MAX_NB_JOUEURS);
+				
+				(* pARejoindre).joueursSockets[0] = (* args).socket;
+
+				(* args).tPartieThreadArgs[idPartie] = (partieThreadArgs)
+				{
+					idPartie, pARejoindre
+				};
+				pthread_create(&((* args).partieThreads[idPartie]), NULL, &ThreadPartie, &(* args).tPartieThreadArgs[idPartie]);
+				(* (* args).nbParties)++;
+
+				printf("debug4\n");
+
+				(* args).tJoueurThreadArgs[(* pARejoindre).nbJoueurs] = (joueurThreadArgs)
+				{
+					&(* pARejoindre).state, pARejoindre, (* pARejoindre).joueurs, (* pARejoindre).nbJoueurs, (* args).socket, (* pARejoindre).joueursSockets
+				};
+				pthread_create(&(* args).joueursThreads[(MAX_NB_JOUEURS * (* pARejoindre).id)], NULL, &ThreadJoueur, &(* args).tJoueurThreadArgs[(* pARejoindre).nbJoueurs]);
+				printf("debug5\n");
+
+				(*pARejoindre).nbJoueurs++;
+
+				char message[2 + 1] = "8_";
+				message[1] = (char) (* pARejoindre).id;
+				write((* args).socket, message, sizeof(message));
+			}
+			
+		break;
+		case '9':; // Rejoindre une partie
+			int idPartie = buffer[1];
+			char message[2 + 1] = "9_";
+			if(idPartie < (* (* args).nbParties))
+			{
+				partie * pARejoindre = (* args).tPartieThreadArgs[idPartie].mPartie;
+				if((* pARejoindre).nbJoueurs < MAX_NB_JOUEURS)
+				{
+					(* pARejoindre).joueursSockets[(* pARejoindre).nbJoueurs] = (* args).socket;
+					(* args).tJoueurThreadArgs[(* pARejoindre).nbJoueurs] = (joueurThreadArgs)
+					{
+						&(* pARejoindre).state, pARejoindre, (* pARejoindre).joueurs, (* pARejoindre).nbJoueurs, (* args).socket, (* pARejoindre).joueursSockets
+					};
+					pthread_create(&(* args).joueursThreads[(MAX_NB_JOUEURS * (* pARejoindre).id) + (* pARejoindre).nbJoueurs], NULL, &ThreadJoueur, &(* args).tJoueurThreadArgs[(MAX_NB_JOUEURS * (* pARejoindre).id) + (* pARejoindre).nbJoueurs]);
+
+					printf("dernier arrivé a le thread : %d\n", (* args).socket);
+					(*pARejoindre).nbJoueurs++;
+					message[1] = '1';
+				}
+				else
+					message[1] = '0';
+			}
+			else
+				message[1] = '0';
+			write((* args).socket, message, strlen(message));		
+		break;
+	}
+	return NULL;
+}
 
 /// Envoie un message à tous les FD de sockets qui ne sont pas nuls.
 void GlobalMessage(char * message, int * sockets)

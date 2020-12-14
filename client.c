@@ -26,6 +26,7 @@ struct TclientThreadArgs {
 	int fd;
 	int * monId;
 	char * pseudo;
+	int * pauseId;
 } typedef clientThreadArgs;
 
 
@@ -40,6 +41,7 @@ void * ThreadJoueur(void * arg);
 void DemarrerPartie(enum State s);
 void PositionJoueurs(char * message, joueur joueurs[]);
 void PauserJeu(enum State s);
+void AfficheEcranFin(char * pseudo);
 void JoueurGagnant(char * message, enum State s);
 int main(int argc, char **argv);
 
@@ -47,16 +49,14 @@ int main(int argc, char **argv);
 int main(int argc, char **argv) {
 	/* Variables liées au socket */
 	int port = 12345;
-	int 	socket_descriptor, 	/* descripteur de socket */
-		longueur; 		/* longueur d'un buffer utilisé */
+	int 	socket_descriptor;	/* descripteur de socket */
 	sockaddr_in adresse_locale; 	/* adresse de socket local */
 	hostent *	ptr_host; 		/* info sur une machine hote */
-	servent *	ptr_service; 		/* info sur service */
 	char 	buffer[256];
-	char *	prog; 			/* nom du programme */
 	char *	host; 			/* nom de la machine distante */
 
 	pthread_t thread;
+	int quitter = 0;
 
 	/* Variables liées au jeu */
 	enum State state = Init;
@@ -74,7 +74,6 @@ int main(int argc, char **argv) {
 		exit(1);
 	}
    
-	prog = argv[0];
 	host = argv[1];
 	
 	printf("adresse du serveur  : %s \n", host);
@@ -105,8 +104,44 @@ int main(int argc, char **argv) {
 		perror("erreur : impossible de se connecter au serveur.");
 		exit(1);
 	}
-	else
+	while(quitter == 0)
 	{
+		printf("Voulez-vous (r)ejoindre une partie en cours ou en (c)réer une nouvelle ? R ou C, Q pour quitter.\n");
+		char choix = (char) fgetc(stdin);
+		if(choix == 'q' || choix =='Q')
+			exit(0);
+			
+		if(choix == 'c' || choix =='C')
+		{
+			char * message = "8";
+			write(socket_descriptor, message, strlen(message) + 1);
+			read(socket_descriptor, buffer, sizeof(buffer));
+			if((int)buffer[1] != -1)
+			{
+				printf("Partie créée ! Numéro : %d\n", (int)buffer[1]);
+			}
+		}
+		else
+		{
+			int salleExiste;
+			do
+			{
+				salleExiste = 0;
+				printf("Quel numéro de partie voulez-vous rejoindre ?\n");
+				int num;
+				scanf("%d", &num);
+				char  message[2 + 1] = "9_";
+				message[1] = (char) num;
+				write(socket_descriptor, message, strlen(message) + 1);
+				read(socket_descriptor, buffer, sizeof(buffer));
+				if(buffer[0] == '9' && buffer[1] == '1')
+				salleExiste = 1;
+				else
+					printf("Cette partie n'est pas disponible !\n");
+			} while (salleExiste == 0);			
+		}
+		
+
 		InitJoueurs(joueurs);	
 		do
 		{
@@ -133,84 +168,75 @@ int main(int argc, char **argv) {
 			}
 
 		} while (state != WaitForId);
-	}
 
-	while(state == WaitForId);
+		while(state == WaitForId);
 
-	if(monId == 0)
-	{
-		printf("\n> Vous êtes l'hôte. Appuyez sur Entrée pour commencer la partie.\n\n");
-		char saisie[2];
-		fgets(saisie, 3, stdin);
-		printf("\n> Démarrage de la partie.\n\n");
-		char * message = "1d";
-		write(socket_descriptor, message, strlen(message) + 1);
-	}
-	else
-	{
-		printf("En attente de démarrage...\n");
-	}
-
-	while(state == WaitForStart);
-	
-	printf("Go ! \n");
-
-
-	// Boucle principale du jeu
-	// Tant que ce n'est pas fini, on boucle sur l'état actuel.
-	char * keys = "gd";
-	char next = 0;
-
-	InitScreen(joueurs);
-	UpdateScreen(joueurs);
-	
-	while(state != Finished)
-	{
-		switch(state)
+		if(monId == 0)
 		{
-			case Paused :; // Si un joueur appuie sur la touche de pause, on bascule en pause, et il ne se passe plus rien.
-			break;
-			case Started :; // La partie n'est pas en pause, le joueur peut appuyer sur les touches.
-			if(c_kbhit())
-			{
-				char c = c_getch();
-				if(c == keys[next])
-				{
-					char message[3 + 1] = "2_e";
-					message[1] = monId + 48;
-
-					write(socket_descriptor, message, strlen(message) + 1);
-					next = (next + 1) % strlen(keys);
-					printf("\b\b\b%c !\n", keys[next]);
-					joueurs[monId].avancee++;
-					UpdateScreen(joueurs);
-				}
-			}
-			break;
+			printf("\n> Vous êtes l'hôte. Appuyez sur Entrée pour commencer la partie.\n\n");
+			char saisie[2];
+			fgets(saisie, 3, stdin);
+			printf("\n> Démarrage de la partie.\n\n");
+			char * message = "1d";
+			write(socket_descriptor, message, strlen(message) + 1);
 		}
+		else
+		{
+			printf("En attente de démarrage...\n");
+		}
+
+		while(state == WaitForStart);
+		
+		printf("Go ! \n");
+
+
+		// Boucle principale du jeu
+		// Tant que ce n'est pas fini, on boucle sur l'état actuel.
+		char * keys = "gd";
+		int next = 0;
+
+		InitScreen(joueurs);
+		UpdateScreen(joueurs);
+		
+		while(state != Finished)
+		{
+			switch(state)
+			{
+				case Paused :; // Si un joueur appuie sur la touche de pause, on bascule en pause, et il ne se passe plus rien.
+				break;
+				case Started :; // La partie n'est pas en pause, le joueur peut appuyer sur les touches.
+				if(c_kbhit())
+				{
+					char c = c_getch();
+					if(c == (char) keys[next])
+					{
+						char message[3 + 1] = "2_e";
+						message[1] = monId + 48;
+
+						write(socket_descriptor, message, strlen(message) + 1);
+						next = (next + 1) % strlen(keys);
+						printf("\b\b\b%c !\n", (char) keys[next]);
+						joueurs[monId].avancee++;
+						UpdateScreen(joueurs);
+					}
+					else
+					{
+						if (c == 'p')
+						{
+							char message[2 + 1] = "3_";
+							message[1] = monId + 48;
+							write(socket_descriptor, message, strlen(message) + 1);
+						}
+						
+					}
+					
+				}
+				break;
+				default:;
+			}
+		}
+		printf("\n");
 	}
-	printf("\n");
-
-
-
-	// Appelle la fonction adéquate pour prendre en charge le mesasge reçu, en fonction du code donné en message.
-	// Côté Client : 
-	//   0 = Le serveur envoie les informations d'un joueur
-	//   1 = Le serveur répond au message Serveur 0, en envoyant l'ID de ce client
-	//   2 = Le serveur envoie le signal "Démarrage de la partie"
-	//   3 = Le serveur envoie la position des joueurs
-	//   4 = Le serveur envoie le signal "Pause"
-	//   5 = Le serveur envoie le signal "Joueur Gagnant"
-	//   6 = Le serveur envoie les informations du joueur gagnant
-
-	// Côté Serveur : 
-	//   0 = Le client envoie ses informations (pseudo, IP)
-	//   1 = Le client hôte envoie le signal "Démarrage de la partie"
-	//   2 = Le client envoie le signal "Appui sur Espace"
-	//   3 = Le client envoie le signal "Pause"
-	//   4 = Le serveur envoie le signal "Joueur Gagnant"
-	//   5 = Le serveur envoie les informations du joueur gagnant
-			  
 
 	close(socket_descriptor);
 	
@@ -259,6 +285,7 @@ void * ThreadJoueur(void * arg)
 		if(read((* args).fd, buffer, sizeof(buffer)) > 0)
 		{
 			joueur nJ;
+			printf("> Message reçu : %s\n", buffer);
 			switch(buffer[0])
 			{
 				case '0' : // Récupérer infos d'un joueur
@@ -314,7 +341,8 @@ void * ThreadJoueur(void * arg)
 				break;
 			}
 		}
-	}		
+	}	
+	return NULL;	
 }
 
 
@@ -358,7 +386,6 @@ void InitScreen(joueur * joueurs)
 	printf("%s%d\n", score, SCORE);
 
 	c_gotoxy(paddingX, paddingY);
-	int ind = 0;
 	for(int i = 0; i < MAX_NB_JOUEURS; i++)
 	{
 		if(joueurs[i].pseudo[0] != '\0')
@@ -377,7 +404,6 @@ void UpdateScreen(joueur * joueurs)
 	int barPadding = 2;
 
 	c_gotoxy(paddingX, paddingY);
-	int ind = 0;
 	for(int i = 0; i < MAX_NB_JOUEURS; i++)
 	{
 		if(joueurs[i].pseudo[0] != '\0')

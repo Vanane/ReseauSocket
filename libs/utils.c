@@ -28,6 +28,7 @@ void PrintAscii(char c[], int taille)
 void SaisirString(int taille, char * output)
 {
     char saisie[taille+1];
+    fflush(stdin);
     do
     {             
         fgets(saisie, taille + 1, stdin);
